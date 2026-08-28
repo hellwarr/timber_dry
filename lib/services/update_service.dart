@@ -1,8 +1,8 @@
-import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:http/http.dart' as http;
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class AppUpdateInfo {
@@ -24,46 +24,33 @@ class AppUpdateInfo {
 }
 
 class UpdateService {
-  static const String currentVersion = '2.5.2';
-  static const String repoOwner = 'hellwarr';
-  static const String repoName = 'timber_dry';
+  static const String currentVersion = '2.5.3';
 
-  /// Check GitHub for latest release
+  /// Check Firestore /app_config/releases
   static Future<AppUpdateInfo?> fetchLatestRelease() async {
     try {
-      final url = Uri.parse('https://api.github.com/repos///releases/latest');
-      final response = await http.get(url, headers: {
-        'Accept': 'application/vnd.github.v3+json',
-      }).timeout(const Duration(seconds: 8));
+      final doc = await FirebaseFirestore.instance
+          .collection('app_config')
+          .doc('releases')
+          .get(const GetOptions(source: Source.serverAndCache))
+          .timeout(const Duration(seconds: 6));
 
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final tagName = (data['tag_name'] as String? ?? '').replaceFirst('v', '').trim();
-        final body = data['body'] as String? ?? 'Оновлення містить виправлення та нові функції.';
-        final htmlUrl = data['html_url'] as String?;
+      if (doc.exists && doc.data() != null) {
+        final data = doc.data()!;
+        final latestVersion = (data['latestVersion'] as String? ?? '').replaceFirst('v', '').trim();
+        final changelog = data['changelog'] as String? ?? 'Оновлення містить виправлення та нові можливості.';
+        final apkUrl = data['apkUrl'] as String?;
+        final winUrl = data['windowsUrl'] as String?;
+        final releaseUrl = data['releaseUrl'] as String?;
 
-        String? winUrl;
-        String? apkUrl;
-
-        final assets = data['assets'] as List? ?? [];
-        for (var asset in assets) {
-          final name = (asset['name'] as String? ?? '').toLowerCase();
-          final downloadUrl = asset['browser_download_url'] as String?;
-          if (name.contains('.apk')) {
-            apkUrl = downloadUrl;
-          } else if (name.contains('windows') || name.contains('.zip') || name.contains('.exe')) {
-            winUrl = downloadUrl;
-          }
-        }
-
-        final hasUpdate = _isVersionNewer(currentVersion, tagName);
+        final hasUpdate = _isVersionNewer(currentVersion, latestVersion);
 
         return AppUpdateInfo(
-          latestVersion: tagName.isNotEmpty ? tagName : currentVersion,
-          changelog: body,
+          latestVersion: latestVersion.isNotEmpty ? latestVersion : currentVersion,
+          changelog: changelog,
           windowsUrl: winUrl,
           apkUrl: apkUrl,
-          releaseUrl: htmlUrl,
+          releaseUrl: releaseUrl,
           hasUpdate: hasUpdate,
         );
       }
@@ -197,9 +184,9 @@ class UpdateService {
       );
     } else if (isManualCheck) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: const Color(0xFF10B981),
-          content: Text('У вас встановлено найновішу версію TimberDry (v)!'),
+        const SnackBar(
+          backgroundColor: Color(0xFF10B981),
+          content: Text('У вас встановлено найновішу версію TimberDry!'),
         ),
       );
     }

@@ -3028,13 +3028,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const Icon(Icons.forest_outlined, color: Colors.white24, size: 28),
                   const SizedBox(height: 6),
                   Text(
-                    'TimberDry Pro v2.3.1',
+                    'TimberDry Pro v${UpdateService.currentVersion}',
                     style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white38),
                   ),
                   const SizedBox(height: 2),
                   const Text(
                     'Промисловий контроль сушіння деревини',
                     style: TextStyle(fontSize: 10, color: Colors.white24),
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: () => UpdateService.checkAndShowUpdateDialog(context, isManualCheck: true),
+                    icon: const Icon(Icons.sync_rounded, size: 16, color: Color(0xFF00E5FF)),
+                    label: Text(
+                      'Перевірити оновлення',
+                      style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF00E5FF)),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Color(0x3300E5FF)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    ),
                   ),
                 ],
               ),
