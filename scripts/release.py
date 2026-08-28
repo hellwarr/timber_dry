@@ -107,7 +107,9 @@ def send_telegram_apk(chat_id, thread_id, version_name, build_num, notes):
     boundary = f"----WebKitFormBoundary{uuid.uuid4().hex}"
     body = bytearray()
     
-    fields = [("chat_id", str(chat_id)), ("caption", caption), ("parse_mode", "Markdown")]
+    # Remove unescaped markdown underscores in notes
+    safe_caption = caption.replace("_", " ")
+    fields = [("chat_id", str(chat_id)), ("caption", safe_caption)]
     if thread_id:
         fields.append(("message_thread_id", str(thread_id)))
         

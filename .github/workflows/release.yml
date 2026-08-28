@@ -132,6 +132,7 @@ jobs:
   publish-release:
     name: 🏷️ Publish Multi-Platform GitHub Release
     needs: [build-android, build-windows, build-web]
+    if: always() && !cancelled() && (needs.build-android.result == 'success' || needs.build-web.result == 'success')
     runs-on: ubuntu-latest
     steps:
       - name: 📥 Checkout
@@ -148,6 +149,7 @@ jobs:
         with:
           name: windows-app
           path: release_assets/
+        continue-on-error: true
 
       - name: 📥 Download Web Dist
         uses: actions/download-artifact@v4
