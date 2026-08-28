@@ -1,0 +1,180 @@
+name: 🚀 Build & Release TimberDry Pro
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'Release version (e.g. v2.6.0)'
+        required: true
+        default: 'v2.6.0'
+
+permissions:
+  contents: write
+
+jobs:
+  # ==========================================
+  # 1. BUILD ANDROID APK
+  # ==========================================
+  build-android:
+    name: 📱 Build Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: ☕ Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 🐦 Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.x'
+          channel: 'stable'
+          cache: true
+
+      - name: 📦 Install Dependencies
+        run: flutter pub get
+
+      - name: 🔨 Build Release APK
+        run: flutter build apk --release
+
+      - name: 📤 Upload Android Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+  # ==========================================
+  # 2. BUILD WINDOWS DESKTOP (.EXE)
+  # ==========================================
+  build-windows:
+    name: 💻 Build Windows Desktop
+    runs-on: windows-latest
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🐦 Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.x'
+          channel: 'stable'
+          cache: true
+
+      - name: 📦 Install Dependencies
+        run: flutter pub get
+
+      - name: ⚙️ Enable Windows Desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: 🔨 Build Release Windows
+        run: flutter build windows --release
+
+      - name: 🗜️ Archive Windows Release
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "build\windows\x64\runner\Release\*" -DestinationPath "TimberDry_Windows_x64.zip"
+
+      - name: 📤 Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-app
+          path: TimberDry_Windows_x64.zip
+          if-no-files-found: error
+
+  # ==========================================
+  # 3. BUILD WEB (PWA / HOSTING)
+  # ==========================================
+  build-web:
+    name: 🌐 Build Web PWA
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🐦 Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.x'
+          channel: 'stable'
+          cache: true
+
+      - name: 📦 Install Dependencies
+        run: flutter pub get
+
+      - name: ⚙️ Enable Web
+        run: flutter config --enable-web
+
+      - name: 🔨 Build Release Web
+        run: flutter build web --release
+
+      - name: 🗜️ Archive Web Files
+        run: |
+          cd build/web && zip -r ../../TimberDry_Web.zip . && cd ../..
+
+      - name: 📤 Upload Web Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: TimberDry_Web.zip
+          if-no-files-found: error
+
+  # ==========================================
+  # 4. PUBLISH GITHUB RELEASE
+  # ==========================================
+  publish-release:
+    name: 🏷️ Publish Multi-Platform GitHub Release
+    needs: [build-android, build-windows, build-web]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 📥 Download Android APK
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+          path: release_assets/
+
+      - name: 📥 Download Windows App
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-app
+          path: release_assets/
+
+      - name: 📥 Download Web Dist
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: release_assets/
+
+      - name: 🏷️ Determine Tag Name
+        id: tag_info
+        run: |
+          if [ -n "${{ github.event.inputs.version_name }}" ]; then
+            echo "TAG_NAME=${{ github.event.inputs.version_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 🚀 Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag_info.outputs.TAG_NAME }}
+          name: "🪵 TimberDry Pro ${{ steps.tag_info.outputs.TAG_NAME }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            release_assets/app-release.apk
+            release_assets/TimberDry_Windows_x64.zip
+            release_assets/TimberDry_Web.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
