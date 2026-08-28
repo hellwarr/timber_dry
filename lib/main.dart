@@ -138,7 +138,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
     for (var kiln in _kilns) {
       final silenceSec = nowUtc.difference(kiln.lastSeen.toUtc()).inSeconds;
-      final bool shouldBeOnline = silenceSec <= 35 && silenceSec >= -10;
+      final bool shouldBeOnline = silenceSec <= 40;
 
       if (kiln.isOnline != shouldBeOnline) {
         kiln.isOnline = shouldBeOnline;

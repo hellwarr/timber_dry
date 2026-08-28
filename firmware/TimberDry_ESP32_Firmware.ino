@@ -310,6 +310,7 @@ void loop() {
       fields["rssi"]["integerValue"] = WiFi.RSSI();
       fields["firmwareVersion"]["stringValue"] = FIRMWARE_VERSION;
       fields["isOnline"]["booleanValue"] = true;
+      fields["lastSeenEpoch"]["integerValue"] = uptime_sec;
 
       if (valid) {
         fields["currentTemp"]["doubleValue"] = t;
@@ -333,7 +334,8 @@ void loop() {
                           "&updateMask.fieldPaths=ipAddress"
                           "&updateMask.fieldPaths=rssi"
                           "&updateMask.fieldPaths=firmwareVersion"
-                          "&updateMask.fieldPaths=isOnline";
+                          "&updateMask.fieldPaths=isOnline"
+                          "&updateMask.fieldPaths=lastSeenEpoch";
 
       if (valid) {
         updateMask += "&updateMask.fieldPaths=currentTemp"

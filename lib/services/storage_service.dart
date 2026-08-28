@@ -6,6 +6,8 @@ import 'emc_calculator.dart';
 import 'app_identity_service.dart';
 
 class StorageService {
+  static final Map<String, DateTime> _liveDevicePing = {};
+  static final Map<String, int> _lastDeviceUptime = {};
   static const String keyKilns = 'timber_dry_kilns_pure_v5';
   static const String keyPrograms = 'timber_dry_custom_programs';
   static const String keyAlerts = 'timber_dry_alerts';
@@ -182,24 +184,16 @@ class StorageService {
         String ip = data['ipAddress'] ?? data['ip'] ?? '192.168.1.150';
         String ssid = data['wifiSsid'] ?? '';
 
-        DateTime lastSeenUtc = nowUtc;
-        if (data['lastSeen'] != null) {
-          if (data['lastSeen'] is Timestamp) {
-            lastSeenUtc = (data['lastSeen'] as Timestamp).toDate().toUtc();
-          } else if (data['lastSeen'] is String) {
-            lastSeenUtc = DateTime.tryParse(data['lastSeen'])?.toUtc() ?? nowUtc;
-          }
-        } else if (data['lastSeenEpoch'] != null) {
-          int epoch = (data['lastSeenEpoch'] as num).toInt();
-          if (epoch > 1000000) {
-            lastSeenUtc = DateTime.fromMillisecondsSinceEpoch(epoch * 1000, isUtc: true);
-          }
+        String devId = data['deviceId'] ?? doc.id;
+        int prevUptime = _lastDeviceUptime[devId] ?? -1;
+        if (uptimeSec != prevUptime || !_liveDevicePing.containsKey(devId)) {
+          _lastDeviceUptime[devId] = uptimeSec;
+          _liveDevicePing[devId] = nowUtc;
         }
 
-        // If ESP32 reports online flag and sent telemetry recently
+        DateTime lastSeenUtc = _liveDevicePing[devId] ?? nowUtc;
         final int silenceSeconds = nowUtc.difference(lastSeenUtc).inSeconds;
-        final bool rawOnline = data['isOnline'] == true;
-        final bool isOnline = (silenceSeconds <= 45 && silenceSeconds >= -10) || (rawOnline && silenceSeconds <= 120);
+        final bool isOnline = silenceSeconds <= 40;
 
         return KilnDevice(
           id: doc.id,
