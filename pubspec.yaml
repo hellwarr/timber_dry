@@ -1,7 +1,7 @@
 name: timber_dry
 description: "TimberDry Pro - Industrial Wood Drying Climate System."
 publish_to: 'none'
-version: 2.5.3+32
+version: 2.5.4+33
 
 environment:
   sdk: ^3.5.3
