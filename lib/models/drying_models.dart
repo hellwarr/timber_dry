@@ -403,6 +403,20 @@ class KilnDevice {
     return '$mins хв';
   }
 
+  int get wifiSignalPercent {
+    if (rssi <= -100) return 0;
+    if (rssi >= -50) return 100;
+    return (2 * (rssi + 100)).clamp(0, 100);
+  }
+
+  String get wifiSignalQuality {
+    if (rssi >= -55) return 'Відмінний';
+    if (rssi >= -67) return 'Добрий';
+    if (rssi >= -75) return 'Задовільний';
+    if (rssi >= -85) return 'Слабкий';
+    return 'Критично низький';
+  }
+
   Map<String, dynamic> toJson() => {
     'id': id,
     'deviceId': deviceId,

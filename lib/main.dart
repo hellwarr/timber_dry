@@ -1006,21 +1006,42 @@ class KilnsDashboardScreen extends StatelessWidget {
                         ),
                       ],
                     ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF00E5FF).withOpacity(0.12),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.3)),
-                      ),
-                      child: Text(
-                        '#${kiln.deviceId}',
-                        style: GoogleFonts.jetBrainsMono(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w800,
-                          color: const Color(0xFF00E5FF),
+                    Row(
+                      children: [
+                        if (kiln.isOnline) ...[
+                          Icon(
+                            kiln.rssi >= -67 ? Icons.wifi : (kiln.rssi >= -78 ? Icons.wifi_2_bar : Icons.wifi_1_bar),
+                            size: 14,
+                            color: kiln.rssi >= -67 ? const Color(0xFF10B981) : (kiln.rssi >= -78 ? const Color(0xFFFF9000) : const Color(0xFFEF4444)),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${kiln.rssi} dBm',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: kiln.rssi >= -67 ? const Color(0xFF10B981) : (kiln.rssi >= -78 ? const Color(0xFFFF9000) : const Color(0xFFEF4444)),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF00E5FF).withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.3)),
+                          ),
+                          child: Text(
+                            '#${kiln.deviceId}',
+                            style: GoogleFonts.jetBrainsMono(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                              color: const Color(0xFF00E5FF),
+                            ),
+                          ),
                         ),
-                      ),
+                      ],
                     ),
                   ],
                 ),
@@ -1250,10 +1271,90 @@ class KilnDetailScreen extends StatefulWidget {
 
 class _KilnDetailScreenState extends State<KilnDetailScreen> {
   int _chartTabIndex = 0;
+  late KilnDevice _currentKiln;
+  StreamSubscription? _deviceSub;
+  Timer? _liveRefreshTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentKiln = widget.kiln;
+    _subscribeToLiveDevice();
+    _liveRefreshTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  void _subscribeToLiveDevice() {
+    _deviceSub?.cancel();
+    _deviceSub = FirebaseFirestore.instance
+        .collection('devices')
+        .doc(widget.kiln.deviceId)
+        .snapshots()
+        .listen((doc) {
+      if (!mounted || !doc.exists) return;
+      final data = doc.data();
+      if (data == null) return;
+
+      final nowUtc = DateTime.now().toUtc();
+      double temp = (data['currentTemp'] ?? data['temp'] ?? 20.0).toDouble();
+      double hum = (data['currentHumidity'] ?? data['humidity'] ?? 50.0).toDouble();
+      double emc = (data['currentEmc'] ?? EmcCalculator.calculateEmc(temp, hum)).toDouble();
+      bool sensorConnected = data['sensorConnected'] ?? true;
+      String sensorStatus = data['sensorStatus'] ?? (sensorConnected ? 'OK' : 'DISCONNECTED');
+      int uptimeSec = (data['uptimeSeconds'] ?? data['uptime'] ?? 0).toInt();
+      int bootCnt = (data['bootCount'] ?? 1).toInt();
+      int rssi = (data['rssi'] ?? -60).toInt();
+      String ip = data['ipAddress'] ?? data['ip'] ?? '192.168.1.150';
+      String ssid = data['wifiSsid'] ?? '';
+
+      DateTime? docLastSeen;
+      if (data['lastSeen'] != null) {
+        if (data['lastSeen'] is Timestamp) {
+          docLastSeen = (data['lastSeen'] as Timestamp).toDate().toUtc();
+        } else if (data['lastSeen'] is String) {
+          docLastSeen = DateTime.tryParse(data['lastSeen'] as String)?.toUtc();
+        }
+      }
+      DateTime lastSeenUtc = docLastSeen ?? nowUtc;
+      final int silenceSeconds = nowUtc.difference(lastSeenUtc).inSeconds;
+      final bool isOnline = silenceSeconds <= 40;
+
+      setState(() {
+        _currentKiln = KilnDevice(
+          id: doc.id,
+          deviceId: data['deviceId'] ?? doc.id,
+          name: data['label'] ?? data['name'] ?? _currentKiln.name,
+          location: data['location'] ?? (ssid.isNotEmpty ? 'Wi-Fi: $ssid' : _currentKiln.location),
+          ipAddress: ip,
+          currentTemp: temp,
+          currentHumidity: hum,
+          currentEmc: emc,
+          lastSeen: lastSeenUtc.toLocal(),
+          isOnline: isOnline,
+          sensorConnected: isOnline ? sensorConnected : false,
+          sensorStatus: isOnline ? sensorStatus : 'OFFLINE',
+          uptimeSeconds: uptimeSec,
+          bootCount: bootCnt,
+          rssi: rssi,
+          firmwareVersion: data['firmwareVersion'] ?? _currentKiln.firmwareVersion,
+          activeSession: data['activeSession'] != null ? DryingSession.fromJson(data['activeSession']) : null,
+          blePin: data['blePin'] ?? _currentKiln.blePin,
+        );
+      });
+    }, onError: (_) {});
+  }
+
+  @override
+  void dispose() {
+    _deviceSub?.cancel();
+    _liveRefreshTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final session = widget.kiln.activeSession;
+    final session = _currentKiln.activeSession;
     final bool isDrying = session != null && !session.isCompleted;
 
     DryingProgram? program;
@@ -1276,12 +1377,33 @@ class _KilnDetailScreenState extends State<KilnDetailScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              widget.kiln.name,
+              _currentKiln.name,
               style: GoogleFonts.inter(fontWeight: FontWeight.w800, fontSize: 18),
             ),
-            Text(
-              'Апаратний ID: #${widget.kiln.deviceId}',
-              style: GoogleFonts.jetBrainsMono(fontSize: 11, color: const Color(0xFF00E5FF)),
+            Row(
+              children: [
+                Text(
+                  'Апаратний ID: #${_currentKiln.deviceId}',
+                  style: GoogleFonts.jetBrainsMono(fontSize: 11, color: const Color(0xFF00E5FF)),
+                ),
+                if (_currentKiln.isOnline) ...[
+                  const SizedBox(width: 8),
+                  Icon(
+                    _currentKiln.rssi >= -67 ? Icons.wifi : (_currentKiln.rssi >= -78 ? Icons.wifi_2_bar : Icons.wifi_1_bar),
+                    size: 12,
+                    color: _currentKiln.rssi >= -67 ? const Color(0xFF10B981) : (_currentKiln.rssi >= -78 ? const Color(0xFFFF9000) : const Color(0xFFEF4444)),
+                  ),
+                  const SizedBox(width: 3),
+                  Text(
+                    '${_currentKiln.rssi} dBm',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: _currentKiln.rssi >= -67 ? const Color(0xFF10B981) : (_currentKiln.rssi >= -78 ? const Color(0xFFFF9000) : const Color(0xFFEF4444)),
+                    ),
+                  ),
+                ],
+              ],
             ),
           ],
         ),
@@ -1313,11 +1435,11 @@ class _KilnDetailScreenState extends State<KilnDetailScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
-                _buildBigDial('ТЕМПЕРАТУРА', widget.kiln.isOnline ? '${widget.kiln.currentTemp.toStringAsFixed(1)}°C' : '--', const Color(0xFFFF9000)),
+                _buildBigDial('ТЕМПЕРАТУРА', _currentKiln.isOnline ? '${_currentKiln.currentTemp.toStringAsFixed(1)}°C' : '--', const Color(0xFFFF9000)),
                 Container(height: 50, width: 1, color: Colors.white10),
-                _buildBigDial('ВОЛОГІСТЬ', widget.kiln.isOnline ? '${widget.kiln.currentHumidity.toStringAsFixed(1)}%' : '--', const Color(0xFF00E5FF)),
+                _buildBigDial('ВОЛОГІСТЬ', _currentKiln.isOnline ? '${_currentKiln.currentHumidity.toStringAsFixed(1)}%' : '--', const Color(0xFF00E5FF)),
                 Container(height: 50, width: 1, color: Colors.white10),
-                _buildBigDial('EMC ДЕРЕВИНИ', widget.kiln.isOnline ? '${widget.kiln.currentEmc.toStringAsFixed(1)}%' : '--', const Color(0xFF10B981)),
+                _buildBigDial('EMC ДЕРЕВИНИ', _currentKiln.isOnline ? '${_currentKiln.currentEmc.toStringAsFixed(1)}%' : '--', const Color(0xFF10B981)),
               ],
             ),
           ),
@@ -1433,7 +1555,7 @@ class _KilnDetailScreenState extends State<KilnDetailScreen> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Динамічна ціль: ${dynamicTarget.temp.toStringAsFixed(1)}°C (Зараз: ${widget.kiln.currentTemp.toStringAsFixed(1)}°C) • RH: ${dynamicTarget.humidity.toStringAsFixed(1)}% (Зараз: ${widget.kiln.currentHumidity.toStringAsFixed(1)}%) • EMC: ${dynamicTarget.emc.toStringAsFixed(1)}%',
+                      'Динамічна ціль: ${dynamicTarget.temp.toStringAsFixed(1)}°C (Зараз: ${_currentKiln.currentTemp.toStringAsFixed(1)}°C) • RH: ${dynamicTarget.humidity.toStringAsFixed(1)}% (Зараз: ${_currentKiln.currentHumidity.toStringAsFixed(1)}%) • EMC: ${dynamicTarget.emc.toStringAsFixed(1)}%',
                       style: const TextStyle(fontSize: 12, color: Color(0xFF00E5FF)),
                     ),
                   ],
@@ -1494,12 +1616,18 @@ class _KilnDetailScreenState extends State<KilnDetailScreen> {
               children: [
                 Text('Діагностика плати ESP32', style: GoogleFonts.inter(fontWeight: FontWeight.w800, fontSize: 14)),
                 const SizedBox(height: 12),
-                _buildDiagRow('Апаратний ID', '#${widget.kiln.deviceId}'),
-                _buildDiagRow('Локальна IP', widget.kiln.ipAddress),
-                _buildDiagRow('Час роботи (Uptime)', widget.kiln.uptimeFormatted),
-                _buildDiagRow('Статус сенсора', widget.kiln.isOnline ? widget.kiln.sensorStatus : 'OFFLINE', isGood: widget.kiln.isOnline && widget.kiln.sensorConnected),
-                _buildDiagRow('Останній сигнал', '${widget.kiln.lastSeen.hour.toString().padLeft(2, '0')}:${widget.kiln.lastSeen.minute.toString().padLeft(2, '0')}:${widget.kiln.lastSeen.second.toString().padLeft(2, '0')}'),
-                _buildDiagRow('Версія прошивки', widget.kiln.firmwareVersion),
+                _buildDiagRow('Апаратний ID', '#${_currentKiln.deviceId}'),
+                _buildDiagRow('Локальна IP', _currentKiln.ipAddress),
+                _buildDiagRow('Час роботи (Uptime)', _currentKiln.uptimeFormatted),
+                _buildDiagRow('Мережа / Локація', _currentKiln.location),
+                _buildDiagRow(
+                  'Рівень сигналу Wi-Fi',
+                  '${_currentKiln.rssi} dBm (${_currentKiln.wifiSignalPercent}% • ${_currentKiln.wifiSignalQuality})',
+                  isGood: _currentKiln.rssi >= -75,
+                ),
+                _buildDiagRow('Статус сенсора', _currentKiln.isOnline ? _currentKiln.sensorStatus : 'OFFLINE', isGood: _currentKiln.isOnline && _currentKiln.sensorConnected),
+                _buildDiagRow('Останній сигнал', '${_currentKiln.lastSeen.hour.toString().padLeft(2, '0')}:${_currentKiln.lastSeen.minute.toString().padLeft(2, '0')}:${_currentKiln.lastSeen.second.toString().padLeft(2, '0')}'),
+                _buildDiagRow('Версія прошивки', _currentKiln.firmwareVersion),
               ],
             ),
           ),
@@ -1528,9 +1656,9 @@ class _KilnDetailScreenState extends State<KilnDetailScreen> {
         factEmcSpots.add(FlSpot(elapsed, point.emc));
       }
     } else {
-      factTempSpots.add(FlSpot(session.elapsedHours, widget.kiln.currentTemp));
-      factHumSpots.add(FlSpot(session.elapsedHours, widget.kiln.currentHumidity));
-      factEmcSpots.add(FlSpot(session.elapsedHours, widget.kiln.currentEmc));
+      factTempSpots.add(FlSpot(session.elapsedHours, _currentKiln.currentTemp));
+      factHumSpots.add(FlSpot(session.elapsedHours, _currentKiln.currentHumidity));
+      factEmcSpots.add(FlSpot(session.elapsedHours, _currentKiln.currentEmc));
     }
 
     return Container(
@@ -1803,7 +1931,7 @@ class _KilnDetailScreenState extends State<KilnDetailScreen> {
                       onPressed: () async {
                         final session = DryingSession(
                           id: 'session_${DateTime.now().millisecondsSinceEpoch}',
-                          kilnId: widget.kiln.deviceId,
+                          kilnId: _currentKiln.deviceId,
                           programId: selectedProg.id,
                           programName: selectedProg.name,
                           woodSpecies: selectedProg.woodSpecies,
@@ -1811,11 +1939,11 @@ class _KilnDetailScreenState extends State<KilnDetailScreen> {
                           batchVolumeM3: double.tryParse(volumeCtrl.text) ?? 30.0,
                           startTime: DateTime.now(),
                         );
-                        await FirebaseFirestore.instance.collection('devices').doc(widget.kiln.deviceId).set({
+                        await FirebaseFirestore.instance.collection('devices').doc(_currentKiln.deviceId).set({
                           'activeSession': session.toJson(),
                         }, SetOptions(merge: true));
 
-                        setState(() => widget.kiln.activeSession = session);
+                        setState(() => _currentKiln.activeSession = session);
                         widget.onUpdate();
                         Navigator.pop(context);
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -1850,10 +1978,10 @@ class _KilnDetailScreenState extends State<KilnDetailScreen> {
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Ні, продовжити')),
           ElevatedButton(
             onPressed: () async {
-              await FirebaseFirestore.instance.collection('devices').doc(widget.kiln.deviceId).update({
+              await FirebaseFirestore.instance.collection('devices').doc(_currentKiln.deviceId).update({
                 'activeSession': FieldValue.delete(),
               });
-              setState(() => widget.kiln.activeSession = null);
+              setState(() => _currentKiln.activeSession = null);
               widget.onUpdate();
               Navigator.pop(context);
             },
@@ -1866,7 +1994,7 @@ class _KilnDetailScreenState extends State<KilnDetailScreen> {
   }
 
   void _showRenameDialog() {
-    final nameCtrl = TextEditingController(text: widget.kiln.name);
+    final nameCtrl = TextEditingController(text: _currentKiln.name);
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -1882,8 +2010,8 @@ class _KilnDetailScreenState extends State<KilnDetailScreen> {
             onPressed: () async {
               final newName = nameCtrl.text.trim();
               if (newName.isNotEmpty) {
-                await StorageService.updateDeviceLabel(widget.kiln.deviceId, newName);
-                setState(() => widget.kiln.name = newName);
+                await StorageService.updateDeviceLabel(_currentKiln.deviceId, newName);
+                setState(() => _currentKiln.name = newName);
                 widget.onUpdate();
                 Navigator.pop(context);
               }
