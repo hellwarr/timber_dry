@@ -24,7 +24,7 @@ class AppUpdateInfo {
 }
 
 class UpdateService {
-  static const String currentVersion = '2.5.0';
+  static const String currentVersion = '2.5.2';
   static const String repoOwner = 'hellwarr';
   static const String repoName = 'timber_dry';
 
