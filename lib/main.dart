@@ -13,6 +13,8 @@ import 'services/emc_calculator.dart';
 import 'services/storage_service.dart';
 import 'services/app_identity_service.dart';
 import 'screens/ble_provisioning_screen.dart';
+import 'services/update_service.dart';
+
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -92,6 +94,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     _selectedProjectId = StorageService.getSelectedProjectId();
     _initAppIdAndSubscriptions();
     _startHeartbeatWatchdog();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      UpdateService.checkAndShowUpdateDialog(context);
+    });
   }
 
   @override
