@@ -82,15 +82,16 @@ def update_changelog(version_name, notes):
         f.write("# 🪵 CHANGELOG — TimberDry Pro\n" + entry + existing.replace("# 🪵 CHANGELOG — TimberDry Pro\n", ""))
 
 def send_telegram_apk(chat_id, thread_id, version_name, build_num, notes):
-    if not os.path.exists(APK_PATH):
-        fallback = os.path.join(PROJECT_DIR, "build/app/outputs/flutter-apk/app-release.apk")
-        if os.path.exists(fallback):
-            actual_apk = fallback
-        else:
-            print("❌ APK file not found at", APK_PATH)
-            return False
+    arm64_apk = os.path.join(PROJECT_DIR, "build/app/outputs/flutter-apk/app-arm64-v8a-release.apk")
+    universal_apk = os.path.join(PROJECT_DIR, "build/app/outputs/flutter-apk/app-release.apk")
+
+    if os.path.exists(arm64_apk):
+        actual_apk = arm64_apk
+    elif os.path.exists(universal_apk):
+        actual_apk = universal_apk
     else:
-        actual_apk = APK_PATH
+        print("❌ APK file not found at", APK_PATH)
+        return False
 
     file_size_mb = os.path.getsize(actual_apk) / (1024 * 1024)
     if len(notes) > 700:
@@ -172,7 +173,7 @@ def main():
     print("⚙️ Building Release APK with Flutter...")
     env = os.environ.copy()
     env["PATH"] = env.get("PATH", "") + ":/Users/astraagnon/development/flutter/bin"
-    build_cmd = ["flutter", "build", "apk"]
+    build_cmd = ["flutter", "build", "apk", "--split-per-abi"]
     res = subprocess.run(build_cmd, cwd=PROJECT_DIR, env=env)
 
     if res.returncode != 0:
