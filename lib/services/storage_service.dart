@@ -182,12 +182,12 @@ class StorageService {
         String ip = data['ipAddress'] ?? data['ip'] ?? '192.168.1.150';
         String ssid = data['wifiSsid'] ?? '';
 
-        DateTime lastSeenUtc = nowUtc.subtract(const Duration(hours: 1));
+        DateTime lastSeenUtc = nowUtc;
         if (data['lastSeen'] != null) {
           if (data['lastSeen'] is Timestamp) {
             lastSeenUtc = (data['lastSeen'] as Timestamp).toDate().toUtc();
           } else if (data['lastSeen'] is String) {
-            lastSeenUtc = DateTime.tryParse(data['lastSeen'])?.toUtc() ?? lastSeenUtc;
+            lastSeenUtc = DateTime.tryParse(data['lastSeen'])?.toUtc() ?? nowUtc;
           }
         } else if (data['lastSeenEpoch'] != null) {
           int epoch = (data['lastSeenEpoch'] as num).toInt();
@@ -196,8 +196,10 @@ class StorageService {
           }
         }
 
+        // If ESP32 reports online flag and sent telemetry recently
         final int silenceSeconds = nowUtc.difference(lastSeenUtc).inSeconds;
-        final bool isOnline = silenceSeconds <= 35 && silenceSeconds >= -10;
+        final bool rawOnline = data['isOnline'] == true;
+        final bool isOnline = (silenceSeconds <= 45 && silenceSeconds >= -10) || (rawOnline && silenceSeconds <= 120);
 
         return KilnDevice(
           id: doc.id,

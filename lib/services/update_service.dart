@@ -24,7 +24,7 @@ class AppUpdateInfo {
 }
 
 class UpdateService {
-  static const String currentVersion = '2.5.4';
+  static const String currentVersion = '2.5.5';
 
   /// Check Firestore /app_config/releases
   static Future<AppUpdateInfo?> fetchLatestRelease() async {
