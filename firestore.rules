@@ -1,0 +1,31 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Registry of all ESP32 physical sensor devices
+    match /devices/{deviceId} {
+      allow read, write: if true;
+    }
+    
+    // Binding mapping between App Instance ID and allowed Devices
+    match /device_bindings/{appInstanceId} {
+      allow read, write: if true;
+    }
+
+    // Projects and Kilns grouping
+    match /projects/{projectId} {
+      allow read, write: if true;
+    }
+    
+    match /kilns/{document=**} {
+      allow read, write: if true;
+    }
+    
+    match /programs/{document=**} {
+      allow read, write: if true;
+    }
+    
+    match /alerts/{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "278478916441",
+    "project_id": "timber-dry-pro",
+    "storage_bucket": "timber-dry-pro.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:278478916441:android:a7b7fda04bd28ed5b89a48",
+        "android_client_info": {
+          "package_name": "com.astra.timberdry.timber_dry"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB1z1pbtq5JOlWpdROUMTzwc8Ld21i4Rj8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
