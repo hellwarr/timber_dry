@@ -185,13 +185,25 @@ class StorageService {
         String ssid = data['wifiSsid'] ?? '';
 
         String devId = data['deviceId'] ?? doc.id;
+        DateTime? docLastSeen;
+        if (data['lastSeen'] != null) {
+          if (data['lastSeen'] is Timestamp) {
+            docLastSeen = (data['lastSeen'] as Timestamp).toDate().toUtc();
+          } else if (data['lastSeen'] is String) {
+            docLastSeen = DateTime.tryParse(data['lastSeen'] as String)?.toUtc();
+          }
+        }
+
         int prevUptime = _lastDeviceUptime[devId] ?? -1;
-        if (uptimeSec != prevUptime || !_liveDevicePing.containsKey(devId)) {
+        if (!_liveDevicePing.containsKey(devId)) {
+          _lastDeviceUptime[devId] = uptimeSec;
+          _liveDevicePing[devId] = docLastSeen ?? nowUtc;
+        } else if (uptimeSec != prevUptime) {
           _lastDeviceUptime[devId] = uptimeSec;
           _liveDevicePing[devId] = nowUtc;
         }
 
-        DateTime lastSeenUtc = _liveDevicePing[devId] ?? nowUtc;
+        DateTime lastSeenUtc = _liveDevicePing[devId] ?? docLastSeen ?? nowUtc;
         final int silenceSeconds = nowUtc.difference(lastSeenUtc).inSeconds;
         final bool isOnline = silenceSeconds <= 40;
 

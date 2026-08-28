@@ -312,10 +312,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       // 3. Active Drying Session Logbook & Deviation Tracking
       if (session != null && !session.isCompleted) {
         final prog = _programs.firstWhere((p) => p.id == session.programId, orElse: () => _programs.first);
-        final (activeStep, stepIndex, _) = EmcCalculator.getActiveStep(prog, session.elapsedHours);
+        final dynamicTarget = EmcCalculator.getDynamicTarget(prog, session.elapsedHours);
 
         final lastLogged = _lastLoggedTime[kiln.deviceId] ?? DateTime.fromMillisecondsSinceEpoch(0);
-        if (now.difference(lastLogged).inSeconds >= 60 && activeStep != null) {
+        if (now.difference(lastLogged).inSeconds >= 60) {
           _lastLoggedTime[kiln.deviceId] = now;
 
           final point = TelemetryPoint(
@@ -323,9 +323,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             temp: kiln.currentTemp,
             humidity: kiln.currentHumidity,
             emc: kiln.currentEmc,
-            stepIndex: stepIndex,
-            targetTemp: activeStep.targetTemp,
-            targetHumidity: activeStep.targetHumidity,
+            stepIndex: dynamicTarget.stepIndex,
+            targetTemp: dynamicTarget.temp,
+            targetHumidity: dynamicTarget.humidity,
           );
 
           await StorageService.logTelemetryPoint(kiln.deviceId, session, point);
@@ -934,13 +934,14 @@ class KilnsDashboardScreen extends StatelessWidget {
     final bool isDrying = session != null && !session.isCompleted;
 
     DryingProgram? program;
+    DynamicTarget? dynamicTarget;
     DryingStep? currentStep;
     double progress = 0.0;
 
     if (isDrying) {
       program = programs.firstWhere((p) => p.id == session.programId, orElse: () => programs.first);
-      final (step, _, _) = EmcCalculator.getActiveStep(program, session.elapsedHours);
-      currentStep = step;
+      dynamicTarget = EmcCalculator.getDynamicTarget(program, session.elapsedHours);
+      currentStep = dynamicTarget.step;
       progress = (session.elapsedHours / program.totalDurationHours).clamp(0.0, 1.0);
     }
 
@@ -1136,7 +1137,7 @@ class KilnsDashboardScreen extends StatelessWidget {
                       child: _buildSensorBox(
                         title: 'ТЕМПЕРАТУРА',
                         value: kiln.isOnline && kiln.sensorConnected ? '${kiln.currentTemp.toStringAsFixed(1)}°C' : '--',
-                        subValue: currentStep != null ? 'Ціль: ${currentStep.targetTemp.toStringAsFixed(0)}°C' : (kiln.isOnline ? 'Поточна' : 'Офлайн'),
+                        subValue: dynamicTarget != null ? 'План: ${dynamicTarget.temp.toStringAsFixed(1)}°C' : (kiln.isOnline ? 'Поточна' : 'Офлайн'),
                         color: const Color(0xFFFF9000),
                         icon: Icons.thermostat,
                       ),
@@ -1146,7 +1147,7 @@ class KilnsDashboardScreen extends StatelessWidget {
                       child: _buildSensorBox(
                         title: 'ВОЛОГІСТЬ RH',
                         value: kiln.isOnline && kiln.sensorConnected ? '${kiln.currentHumidity.toStringAsFixed(1)}%' : '--',
-                        subValue: currentStep != null ? 'Ціль: ${currentStep.targetHumidity.toStringAsFixed(0)}%' : (kiln.isOnline ? 'Поточна' : 'Офлайн'),
+                        subValue: dynamicTarget != null ? 'План: ${dynamicTarget.humidity.toStringAsFixed(1)}%' : (kiln.isOnline ? 'Поточна' : 'Офлайн'),
                         color: const Color(0xFF00E5FF),
                         icon: Icons.water_drop,
                       ),
@@ -1156,7 +1157,7 @@ class KilnsDashboardScreen extends StatelessWidget {
                       child: _buildSensorBox(
                         title: 'РІВНОВАГА EMC',
                         value: kiln.isOnline && kiln.sensorConnected ? '${kiln.currentEmc.toStringAsFixed(1)}%' : '--',
-                        subValue: 'Вологість дер.',
+                        subValue: dynamicTarget != null ? 'План: ${dynamicTarget.emc.toStringAsFixed(1)}%' : 'Вологість дер.',
                         color: const Color(0xFF10B981),
                         icon: Icons.grass,
                       ),
@@ -1256,13 +1257,14 @@ class _KilnDetailScreenState extends State<KilnDetailScreen> {
     final bool isDrying = session != null && !session.isCompleted;
 
     DryingProgram? program;
+    DynamicTarget? dynamicTarget;
     DryingStep? currentStep;
     double progress = 0.0;
 
     if (isDrying) {
       program = widget.programs.firstWhere((p) => p.id == session.programId, orElse: () => widget.programs.first);
-      final (step, _, _) = EmcCalculator.getActiveStep(program, session.elapsedHours);
-      currentStep = step;
+      dynamicTarget = EmcCalculator.getDynamicTarget(program, session.elapsedHours);
+      currentStep = dynamicTarget.step;
       progress = (session.elapsedHours / program.totalDurationHours).clamp(0.0, 1.0);
     }
 
@@ -1401,11 +1403,37 @@ class _KilnDetailScreenState extends State<KilnDetailScreen> {
                   ),
                   const SizedBox(height: 10),
 
-                  if (currentStep != null) ...[
-                    Text('Поточний етап: ${currentStep.title}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  if (currentStep != null && dynamicTarget != null) ...[
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Text('Поточний етап: ${currentStep.title}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: dynamicTarget.isRamping ? const Color(0xFFFF9000).withOpacity(0.2) : const Color(0xFF10B981).withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(
+                              color: dynamicTarget.isRamping ? const Color(0xFFFF9000).withOpacity(0.5) : const Color(0xFF10B981).withOpacity(0.5),
+                              width: 0.8,
+                            ),
+                          ),
+                          child: Text(
+                            dynamicTarget.transitionPhase,
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              color: dynamicTarget.isRamping ? const Color(0xFFFF9000) : const Color(0xFF10B981),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                     const SizedBox(height: 4),
                     Text(
-                      'Ціль: ${currentStep.targetTemp}°C (Зараз: ${widget.kiln.currentTemp.toStringAsFixed(1)}°C) • Вологість: ${currentStep.targetHumidity}% (Зараз: ${widget.kiln.currentHumidity.toStringAsFixed(1)}%)',
+                      'Динамічна ціль: ${dynamicTarget.temp.toStringAsFixed(1)}°C (Зараз: ${widget.kiln.currentTemp.toStringAsFixed(1)}°C) • RH: ${dynamicTarget.humidity.toStringAsFixed(1)}% (Зараз: ${widget.kiln.currentHumidity.toStringAsFixed(1)}%) • EMC: ${dynamicTarget.emc.toStringAsFixed(1)}%',
                       style: const TextStyle(fontSize: 12, color: Color(0xFF00E5FF)),
                     ),
                   ],
@@ -1485,23 +1513,7 @@ class _KilnDetailScreenState extends State<KilnDetailScreen> {
     double totalDuration = program.totalDurationHours;
     if (totalDuration <= 0) totalDuration = 24.0;
 
-    List<FlSpot> planTempSpots = [];
-    List<FlSpot> planHumSpots = [];
-    List<FlSpot> planEmcSpots = [];
-
-    double currH = 0.0;
-    for (var step in program.steps) {
-      double targetEmc = EmcCalculator.calculateEmc(step.targetTemp, step.targetHumidity);
-      planTempSpots.add(FlSpot(currH, step.targetTemp));
-      planHumSpots.add(FlSpot(currH, step.targetHumidity));
-      planEmcSpots.add(FlSpot(currH, targetEmc));
-
-      currH += step.durationHours;
-
-      planTempSpots.add(FlSpot(currH, step.targetTemp));
-      planHumSpots.add(FlSpot(currH, step.targetHumidity));
-      planEmcSpots.add(FlSpot(currH, targetEmc));
-    }
+    final (planTempSpots, planHumSpots, planEmcSpots) = EmcCalculator.generateSmoothPlanSpots(program, sampleStepHours: 0.5);
 
     List<FlSpot> factTempSpots = [];
     List<FlSpot> factHumSpots = [];
