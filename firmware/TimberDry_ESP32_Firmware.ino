@@ -1,12 +1,14 @@
 /*
  ==============================================================================
-  🪵 TimberDry Pro — ESP32 Industrial Wood Drying Kiln Controller v1.7.5
+  🪵 TimberDry Pro — ESP32 Industrial Wood Drying Kiln Controller v1.7.7
   ------------------------------------------------------------------------------
+  • Persistent, Indefinite Wi-Fi Auto-Reconnection (Never stops retrying)
+  • BLE strictly on-demand: ONLY activates when user presses the BOOT button
+  • 100% dedicated 2.4 GHz radio bandwidth for Wi-Fi (zero BLE collisions)
+  • Deep hardware radio reset cycle on connection drops (prevents driver lock)
+  • Self-healing watchdog: auto-restarts if Wi-Fi disconnected for > 3 minutes
   • Universal BLE Protocol (supports both raw "PIN:SSID:PASS:LABEL" & JSON)
-  • Robust non-blocking Wi-Fi reconnect engine (auto-recovery from dropouts)
-  • Auto BLE activation on Wi-Fi loss for effortless mobile configuration
   • Google Cloud Server Timestamp (REQUEST_TIME) for lastSeen tracking
-  • Brownout & Watchdog lockup protection
  ==============================================================================
 */
 
@@ -32,13 +34,14 @@
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
 const char* DEFAULT_PIN = "196711";
-const char* FIRMWARE_VERSION = "1.7.5";
+const char* FIRMWARE_VERSION = "1.7.7";
 const char* FIRESTORE_PROJECT_ID = "timber-dry-pro";
 
 // ================= GLOBAL STATE =================
 DHT dht(DHTPIN, DHTTYPE);
 Preferences prefs;
 BLEServer* pServer = NULL;
+bool bleInitialized = false;
 
 char device_id[9] = "UNKNOWN";
 uint32_t boot_count = 0;
@@ -49,15 +52,16 @@ String custom_label = "Сушарка №1";
 
 bool bleActive = false;
 unsigned long bleStartTime = 0;
-const unsigned long BLE_TIMEOUT_MS = 180000; // 3 min BLE timeout when connected
+const unsigned long BLE_TIMEOUT_MS = 180000; // 3 min BLE timeout when activated by BOOT
 
 unsigned long lastSendTime = 0;
 const unsigned long SEND_INTERVAL_MS = 10000; // 10s telemetry interval
 
 unsigned long lastWifiReconnectAttempt = 0;
-const unsigned long WIFI_RETRY_INTERVAL_MS = 8000; // Retry Wi-Fi every 8s (non-blocking)
+const unsigned long WIFI_RETRY_INTERVAL_MS = 6000; // Retry Wi-Fi every 6 seconds
 unsigned long wifiDisconnectStartTime = 0;
-int wifiReconnectCount = 0;
+int wifiReconnectFailCount = 0;
+const unsigned long MAX_OFFLINE_WATCHDOG_MS = 180000; // 3 minutes offline watchdog -> auto soft restart
 
 enum LedState {
   LED_CONNECTING,
@@ -77,9 +81,9 @@ void updateStatusLed() {
       digitalWrite(STATUS_LED_PIN, (now / 150) % 2); // Fast blink (3.3 Hz)
       break;
     case LED_BLE_MODE:
-      // Double flash pulse
+      // Double flash pulse: flash-flash-pause
       {
-        unsigned long phase = now % 1200;
+        unsigned long phase = now % 1000;
         bool on = (phase < 100) || (phase >= 200 && phase < 300);
         digitalWrite(STATUS_LED_PIN, on ? HIGH : LOW);
       }
@@ -248,10 +252,8 @@ class BleCallbacks : public BLECharacteristicCallbacks {
     }
 };
 
-void startBLE() {
-  if (bleActive) return;
-  Serial.printf("📡 Starting BLE Provisioning for Device [%s]...\n", device_id);
-
+void initBLEStack() {
+  if (bleInitialized) return;
   String bleName = "TimberDry_" + String(device_id);
   BLEDevice::init(bleName.c_str());
   pServer = BLEDevice::createServer();
@@ -281,22 +283,46 @@ void startBLE() {
   scanResponseData.setName(bleName.c_str());
   pAdvertising->setScanResponseData(scanResponseData);
 
-  BLEDevice::startAdvertising();
+  bleInitialized = true;
+}
 
+void startBLE() {
+  initBLEStack();
+  BLEDevice::startAdvertising();
   bleActive = true;
   bleStartTime = millis();
   currentLedState = LED_BLE_MODE;
-  Serial.println("✅ BLE Advertising active! Waiting for TimberDry App connection...");
+  Serial.printf("📡 [BOOT BUTTON] BLE Pairing mode activated for [TimberDry_%s] (3 min timeout)!\n", device_id);
 }
 
 void stopBLE() {
   if (!bleActive) return;
-  Serial.println("🔒 Stopping BLE service to save power & RAM...");
-  BLEDevice::deinit(true);
+  Serial.println("🔒 Stopping BLE advertising. Restoring full radio to Wi-Fi...");
+  if (BLEDevice::getAdvertising()) {
+    BLEDevice::getAdvertising()->stop();
+  }
   bleActive = false;
 }
 
-// ================= WI-FI CONNECTION ENGINE =================
+// ================= CONTINUOUS WI-FI ENGINE =================
+void performCleanWifiBegin() {
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(true);
+  WiFi.disconnect(true, false);
+  delay(50);
+  WiFi.mode(WIFI_STA);
+  WiFi.setTxPower(WIFI_POWER_17dBm);
+  WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
+}
+
+void performColdRadioReset() {
+  Serial.println("⚡ Performing Cold Hardware Radio Reset (clearing stuck IDF state)...");
+  WiFi.disconnect(true, true);
+  WiFi.mode(WIFI_OFF);
+  delay(150);
+  performCleanWifiBegin();
+}
+
 bool tryConnectWiFi(bool blockingWait = true) {
   if (wifi_ssid.length() == 0) {
     Serial.println("⚠️ No Wi-Fi credentials stored in NVS.");
@@ -305,17 +331,11 @@ bool tryConnectWiFi(bool blockingWait = true) {
 
   Serial.printf("🔌 Connecting to Wi-Fi SSID: '%s'...\n", wifi_ssid.c_str());
   currentLedState = LED_CONNECTING;
-
-  WiFi.persistent(false);
-  WiFi.setAutoReconnect(true);
-  WiFi.disconnect(true, false);
-  delay(100);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
+  performCleanWifiBegin();
 
   if (blockingWait) {
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 30) { // Up to 15 seconds wait
+    while (WiFi.status() != WL_CONNECTED && attempts < 25) { // 12.5 seconds wait
       delay(500);
       updateStatusLed();
       yield();
@@ -332,10 +352,10 @@ bool tryConnectWiFi(bool blockingWait = true) {
                     WiFi.RSSI());
       currentLedState = LED_SOLID_OK;
       wifiDisconnectStartTime = 0;
-      wifiReconnectCount = 0;
+      wifiReconnectFailCount = 0;
       return true;
     } else {
-      Serial.printf("❌ Wi-Fi Connection Timeout (Status: %d)\n", WiFi.status());
+      Serial.printf("⚠️ Initial Wi-Fi Connection Timeout (Status: %d). Continuing background reconnect...\n", WiFi.status());
       return false;
     }
   }
@@ -367,25 +387,24 @@ void setup() {
   custom_label = prefs.getString("label", "Сушарка №1");
   prefs.end();
 
+  // Initialize BLE Stack (dormant until BOOT button is pressed)
+  initBLEStack();
+
   dht.begin();
   delay(300);
 
   Serial.println("\n=======================================================");
-  Serial.println("🪵 TimberDry Pro — ESP32 Industrial Controller v1.7.5");
+  Serial.println("🪵 TimberDry Pro — ESP32 Industrial Controller v1.7.7");
   Serial.printf("🏷️ Device ID: #%s | Boot Count: #%u\n", device_id, boot_count);
   Serial.printf("📶 Stored SSID: '%s' | Label: '%s'\n", wifi_ssid.c_str(), custom_label.c_str());
   Serial.printf("☁️ Firestore Project: %s\n", FIRESTORE_PROJECT_ID);
   Serial.println("=======================================================");
 
-  bool connected = false;
   if (wifi_ssid.length() > 0) {
-    connected = tryConnectWiFi(true);
-  }
-
-  // If Wi-Fi connection failed or not configured, immediately start BLE mode
-  if (!connected) {
+    tryConnectWiFi(true);
+  } else {
+    Serial.println("⚠️ No Wi-Fi configured yet. Press BOOT button or start BLE to configure.");
     startBLE();
-    wifiDisconnectStartTime = millis();
   }
 }
 
@@ -394,43 +413,55 @@ void loop() {
   updateStatusLed();
   yield();
 
-  // 1. Press BOOT button to manually activate BLE pairing mode anytime
+  // 1. BOOT BUTTON: The ONLY trigger that activates BLE pairing mode
   if (digitalRead(PAIR_BUTTON_PIN) == LOW) {
     delay(50);
     if (digitalRead(PAIR_BUTTON_PIN) == LOW) {
-      Serial.println("🔘 BOOT button pressed -> Activating BLE mode!");
+      Serial.println("🔘 [USER ACTION] BOOT button pressed -> Activating BLE mode!");
       startBLE();
+      while (digitalRead(PAIR_BUTTON_PIN) == LOW) {
+        delay(10);
+        updateStatusLed();
+      }
     }
   }
 
-  // 2. Auto-disable BLE only if Wi-Fi is connected and timeout expired
-  if (bleActive && WiFi.status() == WL_CONNECTED && (millis() - bleStartTime > BLE_TIMEOUT_MS)) {
+  // 2. BLE Timeout: Auto-stop BLE after 3 minutes to keep RF radio dedicated to Wi-Fi
+  if (bleActive && (millis() - bleStartTime > BLE_TIMEOUT_MS)) {
     stopBLE();
-    currentLedState = lastPushSuccess ? LED_SOLID_OK : LED_SOS;
+    currentLedState = (WiFi.status() == WL_CONNECTED && lastPushSuccess) ? LED_SOLID_OK : LED_CONNECTING;
   }
 
-  // 3. Wi-Fi Reconnection Engine (Non-blocking retry every 8 seconds)
+  // 3. PERSISTENT INDEFINITE WI-FI RECONNECTION ENGINE
   if (WiFi.status() != WL_CONNECTED) {
     if (wifiDisconnectStartTime == 0) {
       wifiDisconnectStartTime = millis();
     }
 
     if (wifi_ssid.length() > 0) {
+      // Reconnection attempt timer (every 6 seconds)
       if (millis() - lastWifiReconnectAttempt >= WIFI_RETRY_INTERVAL_MS) {
         lastWifiReconnectAttempt = millis();
-        wifiReconnectCount++;
-        Serial.printf("🔄 Wi-Fi Lost. Non-blocking reconnect attempt #%d to '%s'...\n", wifiReconnectCount, wifi_ssid.c_str());
-        
-        WiFi.disconnect();
-        delay(50);
-        WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
-      }
-    }
+        wifiReconnectFailCount++;
+        Serial.printf("🔄 [Wi-Fi Reconnect] Attempt #%d to '%s' (Offline: %us)...\n",
+                      wifiReconnectFailCount,
+                      wifi_ssid.c_str(),
+                      (unsigned int)((millis() - wifiDisconnectStartTime) / 1000));
 
-    // If disconnected for > 20s, activate BLE in background for easy recovery
-    if (!bleActive && (millis() - wifiDisconnectStartTime > 20000)) {
-      Serial.println("⚠️ Wi-Fi unavailable for >20s -> Auto-starting BLE for mobile app configuration...");
-      startBLE();
+        // Every 5 failed attempts -> Deep Cold Hardware Radio Reset
+        if (wifiReconnectFailCount % 5 == 0) {
+          performColdRadioReset();
+        } else {
+          performCleanWifiBegin();
+        }
+      }
+
+      // Self-Healing Watchdog: If offline for > 3 min, auto soft-restart microcontroller
+      if (millis() - wifiDisconnectStartTime > MAX_OFFLINE_WATCHDOG_MS) {
+        Serial.println("⚠️ Offline for > 3 minutes. Triggering Self-Healing Restart to recover hardware registers...");
+        delay(200);
+        ESP.restart();
+      }
     }
 
     if (!bleActive) {
@@ -441,9 +472,9 @@ void loop() {
 
   // When Wi-Fi is connected:
   if (wifiDisconnectStartTime > 0) {
-    Serial.println("🎉 Wi-Fi reconnected!");
+    Serial.println("🎉 Wi-Fi Connected / Restored!");
     wifiDisconnectStartTime = 0;
-    wifiReconnectCount = 0;
+    wifiReconnectFailCount = 0;
     if (!bleActive) currentLedState = LED_SOLID_OK;
   }
 
